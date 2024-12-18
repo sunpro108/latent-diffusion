@@ -11,6 +11,7 @@ from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.util import instantiate_from_config
 
 
+
 class VQModel(pl.LightningModule):
     def __init__(self,
                  ddconfig,
@@ -260,24 +261,37 @@ class VQModel(pl.LightningModule):
         x = 2.*(x-x.min())/(x.max()-x.min()) - 1.
         return x
 
+class WaveModelInterface(torch.nn.Module):
+    def __init__(self, embed_dim, *args, **kwargs):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.encoder = torch.nn.Conv2d(3, 24, 3, stride=4)
+        self.decoder = torch.nn.Conv2d(24, 3, 3, stride=4)
+    
+    def encode(self, x):
+        return self.encoder(x)
+
+    def decode(self, h):
+        return self.decoder(h)
 
 class VQModelInterface(VQModel):
     def __init__(self, embed_dim, *args, **kwargs):
         super().__init__(embed_dim=embed_dim, *args, **kwargs)
         self.embed_dim = embed_dim
 
-    def encode(self, x):
+    def encode(self, x, force_not_quantize=False):
         h = self.encoder(x)
-        h = self.quant_conv(h)
+        if not force_not_quantize:
+            h = self.quant_conv(h)
         return h
 
     def decode(self, h, force_not_quantize=False):
         # also go through quantization layer
         if not force_not_quantize:
             quant, emb_loss, info = self.quantize(h)
+            quant = self.post_quant_conv(quant)
         else:
             quant = h
-        quant = self.post_quant_conv(quant)
         dec = self.decoder(quant)
         return dec
 
