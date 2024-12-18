@@ -109,8 +109,6 @@ with torch.no_grad():
             inpainted = inpainted.cpu().numpy().transpose(0,2,3,1)[0]*255
             Image.fromarray(inpainted.astype(np.uint8)).save(outpath)
 
-# %%
-images, masks
 
 # %% single image 
 outpath = os.path.join(opt.outdir, os.path.split(images[0])[1])
@@ -157,4 +155,6 @@ inpainted = (1-mask)*image+mask*predicted_image
 inpainted = inpainted.cpu().numpy().transpose(0,2,3,1)[0]*255
 
 # %% 
-Image.fromarray(inpainted.astype(np.uint8)).save(outpath)
+Image.fromarray(inpainted.astype(np.uint8)).save('test1.png')
+
+# %%

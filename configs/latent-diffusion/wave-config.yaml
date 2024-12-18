@@ -13,6 +13,8 @@ model:
     channels: 3
     concat_mode: true
     monitor: val/loss
+    use_ema: false
+
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:
@@ -22,6 +24,7 @@ model:
         lr_start: 0.001
         lr_max: 0.1
         lr_min: 0.0001
+
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:
@@ -41,8 +44,43 @@ model:
         - 4
         num_heads: 8
         resblock_updown: true
+
     first_stage_config:
       target: ldm.models.autoencoder.WaveModelInterface
       params:
         embed_dim: 3
+
     cond_stage_config: __is_first_stage__
+
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 12
+    wrap: false
+    train:
+      target: ldm.data.iharmony4_dataset.Iharmony4Dataset
+      params:
+        dataset_root: dataset/ihm4/Hday2night
+        is_for_train: true
+        resize: false
+    validation:
+      target: ldm.data.iharmony4_dataset.Iharmony4Dataset
+      params:
+        dataset_root: dataset/ihm4/Hday2night
+        is_for_train: false
+        resize: false
+
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    accumulate_grad_batches: 2

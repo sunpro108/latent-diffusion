@@ -32,23 +32,6 @@ class Encoder1(nn.Module):
         return y
 
 
-class Encoder(nn.Module):
-    def __init__(self, wavelet='haar'):
-        super().__init__()
-        self.dwt = DWTForward(J=2, mode='zero', wave=wavelet)
-
-    def forward(self, x):
-        assert x.shape[1] == 3
-        y0, (yh0, yh1) = self.dwt(x)
-        yh0 = rearrange(yh0, 'b n c (d h) (e w) -> b (n c d e) h w', d=2, e=2)
-        yh1 = rearrange(yh1, 'b n c h w -> b (n c) h w')
-        print(y0.shape)
-        print(yh0.shape, yh1.shape)
-        y = torch.cat([y0, yh0, yh1], dim=1)
-        # 48 = 3 + 36 + 9
-        return y
-
-
 class Decoder1(nn.Module):
     def __init__(self, wavelet='haar'):
         super().__init__()
@@ -76,9 +59,39 @@ class Decoder1(nn.Module):
         x = torch.cat([x_1, x_2, x_3], dim=1)
         return x
 
-class Decoder(nn.Module):
-    def __init__(self, wavelet='haar'):
+
+class WaveEncoder(nn.Module):
+    def __init__(self, level=3, wavelet='haar'):
         super().__init__()
+        self.level = level
+        self.dwt = DWTForward(J=level, mode='zero', wave=wavelet)
+
+    def forward(self, x):
+        assert x.shape[1] == 3
+        ## x shape: NCHW
+        ll, hh = self.dwt(x)
+        # ll shape: NChw, h = H/2**level, w = W/2**level
+        # hh shape: NC3hw, 3： (H V D)
+        assert len(hh) == self.level
+        y = ll
+        for l in range(self.level):
+            h = hh[l]
+            h = rearrange(
+                h, 
+                'n c d (p h) (q w) -> n (c d p q) h w', 
+                p=2**(self.level - l - 1), 
+                q=2**(self.level - l - 1)
+            )
+            print(h.shape)
+            y = torch.cat([y, h], dim=1)
+            print(y.shape)
+        return y
+
+
+class WaveDecoder(nn.Module):
+    def __init__(self, level = 3, wavelet='haar'):
+        super().__init__()
+        self.level = level
         self.idwt = DWTInverse(mode='zero', wave=wavelet)
 
     def forward(self, h):
@@ -98,35 +111,35 @@ class Decoder(nn.Module):
 if __name__ == '__main__':
     # test
     x = torch.randn(1, 3, 256, 256)
-    encoder = Encoder()
+    encoder = WaveEncoder()
     y = encoder(x)
     print(y.shape)
 
 
-    # test decoder
-    print("decoder:.....................")
-    decoder = Decoder()
-    xo = decoder(y)
-    print(xo.shape)
+    # # test decoder
+    # print("decoder:.....................")
+    # decoder = WaveDecoder()
+    # xo = decoder(y)
+    # print(xo.shape)
     
-    # difference
-    print(torch.abs((xo-x)).mean())
+    # # difference
+    # print(torch.abs((xo-x)).mean())
 
-    # test image 
-    import cv2 
-    import numpy as np
-    path = '../../../data/inpainting_examples/6458524847_2f4c361183_k.png'
-    import os 
-    assert os.path.exists(path)
-    img_rgb = cv2.imread(path)
-    img_ycbcr = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2YCrCb)
-    img_t = torch.from_numpy(img_ycbcr).permute(2, 0, 1).unsqueeze(0).float()/255.0
-    print(img_t.shape)
-    y1 = encoder(img_t)
-    print(y1.shape)
-    xo1 = decoder(y1)
-    print(xo1.shape)
-    img_o = xo1.permute(0, 2, 3, 1).squeeze(0).detach().cpu().numpy()
-    img_o = (img_o*255.0).astype(np.uint8)
-    img_o = cv2.cvtColor(img_o, cv2.COLOR_YCrCb2BGR)
-    cv2.imwrite('test2.png', img_o)
+    # # test image 
+    # import cv2 
+    # import numpy as np
+    # path = '../../../data/inpainting_examples/6458524847_2f4c361183_k.png'
+    # import os 
+    # assert os.path.exists(path)
+    # img_rgb = cv2.imread(path)
+    # img_ycbcr = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2YCrCb)
+    # img_t = torch.from_numpy(img_ycbcr).permute(2, 0, 1).unsqueeze(0).float()/255.0
+    # print(img_t.shape)
+    # y1 = encoder(img_t)
+    # print(y1.shape)
+    # xo1 = decoder(y1)
+    # print(xo1.shape)
+    # img_o = xo1.permute(0, 2, 3, 1).squeeze(0).detach().cpu().numpy()
+    # img_o = (img_o*255.0).astype(np.uint8)
+    # img_o = cv2.cvtColor(img_o, cv2.COLOR_YCrCb2BGR)
+    # cv2.imwrite('test2.png', img_o)

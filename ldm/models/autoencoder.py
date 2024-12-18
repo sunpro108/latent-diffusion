@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from ldm.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
 
 from ldm.modules.diffusionmodules.model import Encoder, Decoder
+from ldm.modules.diffusionmodules.wavemodel import WaveEncoder, WaveDecoder
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 
 from ldm.util import instantiate_from_config
@@ -265,8 +266,8 @@ class WaveModelInterface(torch.nn.Module):
     def __init__(self, embed_dim, *args, **kwargs):
         super().__init__()
         self.embed_dim = embed_dim
-        self.encoder = torch.nn.Conv2d(3, 24, 3, stride=4)
-        self.decoder = torch.nn.Conv2d(24, 3, 3, stride=4)
+        self.encoder = WaveEncoder()
+        self.decoder = WaveDecoder()
     
     def encode(self, x):
         return self.encoder(x)
