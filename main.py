@@ -470,7 +470,7 @@ def train():
     # endregion
 
     # try:
-    # init and save configs
+    # region: init and save configs
     configs = [OmegaConf.load(cfg) for cfg in opt.base]
     cli = OmegaConf.from_dotlist(unknown)
     config = OmegaConf.merge(*configs, cli)
@@ -490,13 +490,13 @@ def train():
         cpu = False
     trainer_opt = argparse.Namespace(**trainer_config)
     lightning_config.trainer = trainer_config
+    # endregion
 
     # model
     model = instantiate_from_config(config.model)
 
-    # trainer and callbacks
+    # region: trainer and callbacks
     trainer_kwargs = dict()
-
     # default logger configs
     default_logger_cfgs = {
         "wandb": {
@@ -523,7 +523,6 @@ def train():
         logger_cfg = OmegaConf.create()
     logger_cfg = OmegaConf.merge(default_logger_cfg, logger_cfg)
     trainer_kwargs["logger"] = instantiate_from_config(logger_cfg)
-
     # modelcheckpoint - use TrainResult/EvalResult(checkpoint_on=metric) to
     # specify which metric is used to determine best models
     default_modelckpt_cfg = {
@@ -618,8 +617,9 @@ def train():
 
     trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
     trainer.logdir = logdir  ###
+    # endregion
 
-    # data
+    # region: data
     data = instantiate_from_config(config.data)
     # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
     # calling these ourselves should not be necessary but it is.
@@ -629,8 +629,9 @@ def train():
     print("#### Data #####")
     for k in data.datasets:
         print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
+    # endregion
 
-    # configure learning rate
+    # region: configure learning rate
     bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
     if not cpu:
         ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))
@@ -652,7 +653,6 @@ def train():
         print("++++ NOT USING LR SCALING ++++")
         print(f"Setting learning rate to {model.learning_rate:.2e}")
 
-
     # allow checkpointing via USR1
     def melk(*args, **kwargs):
         # run all checkpoint hooks
@@ -672,6 +672,8 @@ def train():
 
     signal.signal(signal.SIGUSR1, melk)
     signal.signal(signal.SIGUSR2, divein)
+    # endregion
+    return
 
     # run
     if opt.train:
