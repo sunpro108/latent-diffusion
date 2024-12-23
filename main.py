@@ -1,4 +1,5 @@
 import argparse, os, sys, datetime, glob, importlib, csv
+import logging
 import numpy as np
 import time
 import torch
@@ -19,6 +20,13 @@ from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.util import instantiate_from_config
+
+# region: logging
+
+# logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
+
+# logging.info("==== PyTorch Lightning version =========")
+
 
 
 def get_parser(**parser_kwargs):
@@ -264,8 +272,8 @@ class SetupCallback(Callback):
             if "callbacks" in self.lightning_config:
                 if 'metrics_over_trainsteps_checkpoint' in self.lightning_config['callbacks']:
                     os.makedirs(os.path.join(self.ckptdir, 'trainstep_checkpoints'), exist_ok=True)
-            print("Project config")
-            print(OmegaConf.to_yaml(self.config))
+            # print("Project config")
+            # print(OmegaConf.to_yaml(self.config))
             OmegaConf.save(self.config,
                            os.path.join(self.cfgdir, "{}-project.yaml".format(self.now)))
 
@@ -400,7 +408,7 @@ class CUDACallback(Callback):
         torch.cuda.synchronize(trainer.root_gpu)
         self.start_time = time.time()
 
-    def on_train_epoch_end(self, trainer, pl_module, outputs):
+    def on_train_epoch_end(self, trainer, pl_module):
         torch.cuda.synchronize(trainer.root_gpu)
         max_memory = torch.cuda.max_memory_allocated(trainer.root_gpu) / 2 ** 20
         epoch_time = time.time() - self.start_time
@@ -486,7 +494,8 @@ def train():
         cpu = True
     else:
         gpuinfo = trainer_config["gpus"]
-        print(f"Running on GPUs {gpuinfo}")
+        rank_zero_info(f"Running on GPUs {gpuinfo}")
+        # print(f"Running on GPUs {gpuinfo}")
         cpu = False
     trainer_opt = argparse.Namespace(**trainer_config)
     lightning_config.trainer = trainer_config
@@ -535,7 +544,7 @@ def train():
         }
     }
     if hasattr(model, "monitor"):
-        print(f"Monitoring {model.monitor} as checkpoint metric.")
+        rank_zero_info(f"Monitoring {model.monitor} as checkpoint metric.")
         default_modelckpt_cfg["params"]["monitor"] = model.monitor
         default_modelckpt_cfg["params"]["save_top_k"] = 3
 
@@ -544,7 +553,7 @@ def train():
     else:
         modelckpt_cfg =  OmegaConf.create()
     modelckpt_cfg = OmegaConf.merge(default_modelckpt_cfg, modelckpt_cfg)
-    print(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
+    rank_zero_info(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
     if version.parse(pl.__version__) < version.parse('1.4.0'):
         trainer_kwargs["checkpoint_callback"] = instantiate_from_config(modelckpt_cfg)
 
@@ -590,7 +599,7 @@ def train():
         callbacks_cfg = OmegaConf.create()
 
     if 'metrics_over_trainsteps_checkpoint' in callbacks_cfg:
-        print(
+        rank_zero_info(
             'Caution: Saving checkpoints every n train steps without deleting. This might require some free space.')
         default_metrics_over_trainsteps_ckpt_dict = {
             'metrics_over_trainsteps_checkpoint':
@@ -626,9 +635,10 @@ def train():
     # lightning still takes care of proper multiprocessing though
     data.prepare_data()
     data.setup()
-    print("#### Data #####")
+
+    rank_zero_info("#### Data #####")
     for k in data.datasets:
-        print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
+        rank_zero_info(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
     # endregion
 
     # region: configure learning rate
@@ -641,23 +651,23 @@ def train():
         accumulate_grad_batches = lightning_config.trainer.accumulate_grad_batches
     else:
         accumulate_grad_batches = 1
-    print(f"accumulate_grad_batches = {accumulate_grad_batches}")
+    rank_zero_info(f"accumulate_grad_batches = {accumulate_grad_batches}")
     lightning_config.trainer.accumulate_grad_batches = accumulate_grad_batches
     if opt.scale_lr:
         model.learning_rate = accumulate_grad_batches * ngpu * bs * base_lr
-        print(
+        rank_zero_info(
             "Setting learning rate to {:.2e} = {} (accumulate_grad_batches) * {} (num_gpus) * {} (batchsize) * {:.2e} (base_lr)".format(
                 model.learning_rate, accumulate_grad_batches, ngpu, bs, base_lr))
     else:
         model.learning_rate = base_lr
-        print("++++ NOT USING LR SCALING ++++")
-        print(f"Setting learning rate to {model.learning_rate:.2e}")
+        rank_zero_info("++++ NOT USING LR SCALING ++++")
+        rank_zero_info(f"Setting learning rate to {model.learning_rate:.2e}")
 
     # allow checkpointing via USR1
     def melk(*args, **kwargs):
         # run all checkpoint hooks
         if trainer.global_rank == 0:
-            print("Summoning checkpoint.")
+            rank_zero_info("Summoning checkpoint.")
             ckpt_path = os.path.join(ckptdir, "last.ckpt")
             trainer.save_checkpoint(ckpt_path)
 
@@ -673,17 +683,17 @@ def train():
     signal.signal(signal.SIGUSR1, melk)
     signal.signal(signal.SIGUSR2, divein)
     # endregion
-    return
 
     # run
     if opt.train:
-        try:
-            trainer.fit(model, data)
-        except Exception:
-            melk()
-            raise
-    if not opt.no_test and not trainer.interrupted:
-        trainer.test(model, data)
+        trainer.fit(model, data)
+        # try:
+        #     trainer.fit(model, data)
+        # except Exception:
+        #     melk()
+        #     raise
+    # if not opt.no_test and not trainer.interrupted:
+    #     trainer.test(model, data)
     # except Exception:
     #     if opt.debug and trainer.global_rank == 0:
     #         try:

@@ -12,7 +12,7 @@ class Encoder1(nn.Module):
         self.dwt2 = DWTForward(J=1, mode='zero', wave=wavelet)
 
     def forward(self, x):
-        assert x.shape[1] == 3
+        assert x.shape[1] == 3, x.shape
         x_1 = x[:, :1, ...]
         x_2 = x[:, 1:2, ...]
         x_3 = x[:, 2:, ...]
@@ -67,7 +67,7 @@ class WaveEncoder(nn.Module):
         self.dwt = DWTForward(J=level, mode='zero', wave=wavelet)
 
     def forward(self, x):
-        assert x.shape[1] == 3
+        assert x.shape[1] == 3, x.shape
         ## x shape: NCHW
         ll, hh = self.dwt(x)
         # ll shape: NChw, h = H/2**level, w = W/2**level
@@ -82,53 +82,68 @@ class WaveEncoder(nn.Module):
                 p=2**(self.level - l - 1), 
                 q=2**(self.level - l - 1)
             )
-            print(h.shape)
             y = torch.cat([y, h], dim=1)
-            print(y.shape)
         return y
+
+def calculate_channel(level, channel=3):
+    list_channel = [channel]
+    cc = channel
+    for l in range(level):
+        cc += (channel * 3 * 4 ** (level - l  -1))
+        list_channel.append(cc)
+    return list_channel
 
 
 class WaveDecoder(nn.Module):
-    def __init__(self, level = 3, wavelet='haar'):
+    def __init__(self, level = 3, wavelet='haar', channel=3):
         super().__init__()
         self.level = level
+        self.channel = channel
+        # calculate_channel according level
+        self.channels = calculate_channel(level, channel=channel)
         self.idwt = DWTInverse(mode='zero', wave=wavelet)
 
     def forward(self, h):
-        assert h.shape[1] == 48
-        y0 = h[:, :3, ...] # 3
-        yh0 = h[:, 3:39, ...]  # 36
-        yh1 = h[:, 39:, ...] # 9
-        yh0 = rearrange(yh0, 'b (n c d e) h w -> b n c (d h) (e w)', n=3, c=3, d=2, e=2)
-        yh1 = rearrange(yh1, 'b (n c) h w -> b n c h w', n=3, c=3)
-        print(y0.shape)
-        print(yh0.shape, yh1.shape)
-
-        x = self.idwt((y0, (yh0, yh1)))
+        assert h.shape[1] == 3 * 4 ** self.level, h.shape
+        list_subbands = []
+        ll = h[:, :self.channels[0], ...]
+        list_subbands.append(ll)
+        list_subhigh = []
+        for l in range(self.level):
+            h_ = h[:, self.channels[l]:self.channels[l+1], ...]
+            h_ = rearrange(
+                h_,
+                'n (c d p q) h w -> n c d (p h) (q w)',
+                c = self.channel, d=3, 
+                p = 2 ** (self.level - l - 1), 
+                q = 2 ** (self.level - l - 1), 
+            )
+            list_subhigh.append(h_)
+        list_subbands.append(list_subhigh)
+        x = self.idwt(list_subbands)
         return x
         
 
 if __name__ == '__main__':
     # test
     x = torch.randn(1, 3, 256, 256)
-    encoder = WaveEncoder()
+    encoder = WaveEncoder(level=2)
     y = encoder(x)
     print(y.shape)
 
 
-    # # test decoder
-    # print("decoder:.....................")
-    # decoder = WaveDecoder()
-    # xo = decoder(y)
-    # print(xo.shape)
-    
-    # # difference
-    # print(torch.abs((xo-x)).mean())
+    # test decoder
+    print("decoder:.....................")
+    decoder = WaveDecoder(level=2, channel=3)
+    xo = decoder(y)
+    print(xo.shape)
+    # difference
+    print(torch.abs((xo-x)).mean())
 
-    # # test image 
+    # test image 
     # import cv2 
     # import numpy as np
-    # path = '../../../data/inpainting_examples/6458524847_2f4c361183_k.png'
+    # path = 'data/inpainting_examples/6458524847_2f4c361183_k.png'
     # import os 
     # assert os.path.exists(path)
     # img_rgb = cv2.imread(path)

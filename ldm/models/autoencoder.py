@@ -263,11 +263,11 @@ class VQModel(pl.LightningModule):
         return x
 
 class WaveModelInterface(torch.nn.Module):
-    def __init__(self, embed_dim, *args, **kwargs):
+    def __init__(self, embed_dim, encoder_config, decoder_config, *args, **kwargs):
         super().__init__()
         self.embed_dim = embed_dim
-        self.encoder = WaveEncoder()
-        self.decoder = WaveDecoder()
+        self.encoder = WaveEncoder(**encoder_config)
+        self.decoder = WaveDecoder(**decoder_config)
     
     def encode(self, x):
         return self.encoder(x)

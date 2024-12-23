@@ -98,6 +98,10 @@ def exists(x):
 
 
 def default(val, d):
+    """
+    return val if the val is not None
+    else return d
+    """
     if exists(val):
         return val
     return d() if isfunction(d) else d

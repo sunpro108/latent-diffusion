@@ -5,10 +5,10 @@ from PIL import Image
 import numpy as np
 import torchvision.transforms.functional as F
 from torch.utils.data import Dataset
+from einops import rearrange
 
 
 class Iharmony4Dataset(Dataset):
-    """A template dataset class for you to implement custom datasets."""
     def __init__(self, dataset_root, is_for_train=True, resize=None):
         """Initialize this dataset class.
         Parameters:
@@ -24,11 +24,10 @@ class Iharmony4Dataset(Dataset):
         self.isTrain = is_for_train
         self.image_paths, self.mask_paths, self.gt_paths = [], [], []
         self._load_images_paths()
-        self.transform = HarmonyTransform(resize=resize)
+        self.transform = HarmonyTransform(resize=(resize,resize))
 
     def _load_images_paths(self,):
         if self.isTrain:
-            print('loading training file...')
             trainfile = os.path.join(self.root, 'IHD_train.txt')
             with open(trainfile,'r') as f:
                 for line in f.readlines():
@@ -46,7 +45,6 @@ class Iharmony4Dataset(Dataset):
                     self.gt_paths.append(os.path.join(self.root, gt_path))
         else:
             # if self.opt.accelerator.is_main_process:
-            print('loading test file...')
             trainfile = os.path.join(self.root, 'IHD_test.txt')
             with open(trainfile,'r') as f:
                 for line in f.readlines():
@@ -69,7 +67,7 @@ class Iharmony4Dataset(Dataset):
         #apply the same transform to composite and real images
         comp, real, mask = self.transform(comp, real, mask)
         
-        return {'SR': comp, 'mask': mask, 'HR': real, 'img_path':self.image_paths[index]}
+        return {'comp': comp, 'mask': mask, 'real': real, 'img_path':self.image_paths[index]}
 
     def __len__(self):
         """Return the total number of images."""
@@ -92,30 +90,33 @@ class HarmonyTransform():
         self.resize = resize
 
     def __call__(self, comp=None, real=None, mask=None):
-        tf_comp = None
-        tf_real = None
-        tf_mask = None
         if comp is not None:
+            comp = F.to_tensor(comp)
             if self.resize is not None:
-                tf_comp = F.resize(comp, self.resize)
-            else:
-                tf_comp = comp
-            tf_comp = F.to_tensor(comp)
-            tf_comp = F.normalize(tf_comp, self.mean_img, self.std_img)
+                comp = F.resize(comp, self.resize)
+            comp = F.normalize(comp, self.mean_img, self.std_img)
         if real is not None:
+            real = F.to_tensor(real)
             if self.resize is not None:
-                tf_real = F.resize(real, self.resize)
-            else:
-                tf_real = real
-            tf_real = F.to_tensor(real)
-            tf_real = F.normalize(tf_real, self.mean_img, self.std_img)
+                real = F.resize(real, self.resize)
+            real = F.normalize(real, self.mean_img, self.std_img)
         if mask is not None:
+            mask = F.to_tensor(mask)
             if self.resize is not None:
-                tf_mask = F.resize(mask, self.resize)
-            else: 
-                tf_mask = mask
-            tf_mask = F.to_tensor(mask)
-            tf_mask = F.normalize(tf_mask, self.mean_mask, self.std_mask)
+                mask = F.resize(mask, self.resize)
+            mask = F.normalize(mask, self.mean_mask, self.std_mask)
 
-        tf_comp = tf_comp * tf_mask + tf_real * (1 - tf_mask)
-        return tf_comp, tf_real, tf_mask
+        comp = comp * mask + real * (1 - mask)
+        comp = rearrange(comp, 'c h w -> h w c')
+        real = rearrange(real, 'c h w -> h w c')
+        mask = rearrange(mask, 'c h w -> h w c')
+        return comp, real, mask
+
+
+if __name__ == '__main__':
+    dataset = Iharmony4Dataset('dataset/ihm4/Hday2night', True, 256)
+    data = next(iter(dataset))
+    print(data.keys())
+    print(data['comp'].shape)
+    print(data['real'].shape)
+    print(data['mask'].shape)
