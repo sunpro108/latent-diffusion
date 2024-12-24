@@ -6,30 +6,39 @@ https://github.com/CompVis/taming-transformers
 -- merci
 """
 
+from functools import partial
+
+from tqdm import tqdm
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR
 from einops import rearrange, repeat
 from contextlib import contextmanager
-from functools import partial
-from tqdm import tqdm
 from torchvision.utils import make_grid
+import pytorch_lightning as pl
 from pytorch_lightning.utilities.distributed import rank_zero_only
 from pytorch_lightning.utilities import rank_zero_info
 
-from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
+from ldm.util import (
+    log_txt_as_img, exists, default, ismap, isimage,
+    mean_flat, count_params, instantiate_from_config
+)
 from ldm.modules.ema import LitEma
-from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
-from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
-from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
+from ldm.modules.distributions.distributions import (
+    normal_kl, DiagonalGaussianDistribution)
+from ldm.models.autoencoder import (
+    VQModelInterface, IdentityFirstStage, AutoencoderKL)
+from ldm.modules.diffusionmodules.util import (
+    make_beta_schedule, extract_into_tensor, noise_like)
 from ldm.models.diffusion.ddim import DDIMSampler
 
 
-__conditioning_keys__ = {'concat': 'c_concat',
-                         'crossattn': 'c_crossattn',
-                         'adm': 'y'}
+__conditioning_keys__ = {
+    'concat': 'c_concat',
+    'crossattn': 'c_crossattn',
+    'adm': 'y'
+}
 
 
 def disabled_train(self, mode=True):
@@ -44,35 +53,36 @@ def uniform_on_device(r1, r2, shape, device):
 
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
-    def __init__(self,
-                 unet_config,
-                 timesteps=1000,
-                 beta_schedule="linear",
-                 loss_type="l2",
-                 ckpt_path=None,
-                 ignore_keys=[],
-                 load_only_unet=False,
-                 monitor="val/loss",
-                 use_ema=True,
-                 first_stage_key="image",
-                 image_size=256,
-                 channels=3,
-                 log_every_t=100,
-                 clip_denoised=True,
-                 linear_start=1e-4,
-                 linear_end=2e-2,
-                 cosine_s=8e-3,
-                 given_betas=None,
-                 original_elbo_weight=0.,
-                 v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
-                 l_simple_weight=1.,
-                 conditioning_key=None,
-                 parameterization="eps",  # all assuming fixed variance schedules
-                 scheduler_config=None,
-                 use_positional_encodings=False,
-                 learn_logvar=False,
-                 logvar_init=0.,
-                 ):
+    def __init__(
+        self,
+        unet_config,
+        timesteps=1000,
+        beta_schedule="linear",
+        loss_type="l2",
+        ckpt_path=None,
+        ignore_keys=[],
+        load_only_unet=False,
+        monitor="val/loss",
+        use_ema=True,
+        first_stage_key="image",
+        image_size=256,
+        channels=3,
+        log_every_t=100,
+        clip_denoised=True,
+        linear_start=1e-4,
+        linear_end=2e-2,
+        cosine_s=8e-3,
+        given_betas=None,
+        original_elbo_weight=0.,
+        v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
+        l_simple_weight=1.,
+        conditioning_key=None,
+        parameterization="eps",  # all assuming fixed variance schedules
+        scheduler_config=None,
+        use_positional_encodings=False,
+        learn_logvar=False,
+        logvar_init=0.,
+    ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
         self.parameterization = parameterization
@@ -104,8 +114,9 @@ class DDPM(pl.LightningModule):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys, only_model=load_only_unet)
 
-        self.register_schedule(given_betas=given_betas, beta_schedule=beta_schedule, timesteps=timesteps,
-                               linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
+        self.register_schedule(
+            given_betas=given_betas, beta_schedule=beta_schedule, timesteps=timesteps,
+            linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
 
         self.loss_type = loss_type
 
@@ -115,13 +126,15 @@ class DDPM(pl.LightningModule):
             self.logvar = nn.Parameter(self.logvar, requires_grad=True)
 
 
-    def register_schedule(self, given_betas=None, beta_schedule="linear", timesteps=1000,
-                          linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3):
+    def register_schedule(
+            self, given_betas=None, beta_schedule="linear", timesteps=1000,
+            linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3):
         if exists(given_betas):
             betas = given_betas
         else:
-            betas = make_beta_schedule(beta_schedule, timesteps, linear_start=linear_start, linear_end=linear_end,
-                                       cosine_s=cosine_s)
+            betas = make_beta_schedule(
+                beta_schedule, timesteps, linear_start=linear_start, linear_end=linear_end,
+                cosine_s=cosine_s)
         alphas = 1. - betas
         alphas_cumprod = np.cumprod(alphas, axis=0)
         alphas_cumprod_prev = np.append(1., alphas_cumprod[:-1])
@@ -150,10 +163,14 @@ class DDPM(pl.LightningModule):
                     1. - alphas_cumprod) + self.v_posterior * betas
         # above: equal to 1. / (1. / (1. - alpha_cumprod_tm1) + alpha_t / beta_t)
         self.register_buffer('posterior_variance', to_torch(posterior_variance))
-        # below: log calculation clipped because the posterior variance is 0 at the beginning of the diffusion chain
-        self.register_buffer('posterior_log_variance_clipped', to_torch(np.log(np.maximum(posterior_variance, 1e-20))))
-        self.register_buffer('posterior_mean_coef1', to_torch(
-            betas * np.sqrt(alphas_cumprod_prev) / (1. - alphas_cumprod)))
+        # below: log calculation clipped because the posterior variance is 0 
+        # at the beginning of the diffusion chain
+        self.register_buffer(
+            'posterior_log_variance_clipped',
+            to_torch(np.log(np.maximum(posterior_variance, 1e-20))))
+        self.register_buffer(
+            'posterior_mean_coef1',
+            to_torch(betas * np.sqrt(alphas_cumprod_prev) / (1. - alphas_cumprod)))
         self.register_buffer('posterior_mean_coef2', to_torch(
             (1. - alphas_cumprod_prev) * np.sqrt(alphas) / (1. - alphas_cumprod)))
 
@@ -164,7 +181,7 @@ class DDPM(pl.LightningModule):
             lvlb_weights = 0.5 * np.sqrt(torch.Tensor(alphas_cumprod)) / (2. * 1 - torch.Tensor(alphas_cumprod))
         else:
             raise NotImplementedError("mu not supported")
-        # TODO how to choose this term
+        # TODO: how to choose this term
         lvlb_weights[0] = lvlb_weights[1]
         self.register_buffer('lvlb_weights', lvlb_weights, persistent=False)
         assert not torch.isnan(self.lvlb_weights).all()
@@ -331,7 +348,6 @@ class DDPM(pl.LightningModule):
         x = batch[k]
         if len(x.shape) == 3:
             x = x[..., None]
-        # todo: reshape
         x = rearrange(x, 'b h w c -> b c h w')
         x = x.to(memory_format=torch.contiguous_format).float()
         return x
@@ -653,8 +669,18 @@ class LatentDiffusion(DDPM):
         return fold, unfold, normalization, weighting
 
     @torch.no_grad()
-    def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
-                  cond_key=None, return_original_cond=False, bs=None):
+    def get_input(
+        self, batch, k,
+        return_first_stage_outputs=False, force_c_encode=False,
+        cond_key=None, return_original_cond=False, bs=None):
+        """
+        return:
+            z: first stage encoded latent tensor
+            c: cond stage encoded latent tensor
+            x: first stage input tenosr according first stage key
+            xrec: decode stage output with z as input
+            xc: cond stage input tensor
+        """
         x = super().get_input(batch, k)
         if bs is not None:
             x = x[:bs]
@@ -1250,13 +1276,18 @@ class LatentDiffusion(DDPM):
 
 
     @torch.no_grad()
-    def log_images(self, batch, N=8, n_row=4, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
-                   quantize_denoised=True, inpaint=True, plot_denoise_rows=False, plot_progressive_rows=True,
-                   plot_diffusion_rows=True, **kwargs):
-
+    def log_images(
+        self, batch, N=8, n_row=4, sample=True,
+        ddim_steps=200, ddim_eta=1., return_keys=None,
+        quantize_denoised=True, inpaint=True,
+        plot_denoise_rows=False, plot_progressive_rows=True,
+        plot_diffusion_rows=True, 
+        **kwargs):
         use_ddim = ddim_steps is not None
 
         log = dict()
+
+        # todo: use star expression 
         z, c, x, xrec, xc = self.get_input(batch, self.first_stage_key,
                                            return_first_stage_outputs=True,
                                            force_c_encode=True,
@@ -1264,6 +1295,7 @@ class LatentDiffusion(DDPM):
                                            bs=N)
         N = min(x.shape[0], N)
         n_row = min(x.shape[0], n_row)
+        # region: log key: inputs, reconstruction, conditioning, original_conditioning
         log["inputs"] = x
         log["reconstruction"] = xrec
         if self.model.conditioning_key is not None:
@@ -1280,7 +1312,10 @@ class LatentDiffusion(DDPM):
                 log["conditioning"] = xc
             if ismap(xc):
                 log["original_conditioning"] = self.to_rgb(xc)
+        # endregion
+        
 
+        # region: log choosen key: diffusion_row, samples
         if plot_diffusion_rows:
             # get diffusion row
             diffusion_row = list()
@@ -1419,8 +1454,21 @@ class DiffusionWrapper(pl.LightningModule):
             out = self.diffusion_model(x, t, y=cc)
         else:
             raise NotImplementedError()
-
         return out
+
+
+class HarmonyDiffusion(LatentDiffusion):
+    """ TODO: move all harmony-specific hacks to this class """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @torch.no_grad()
+    def log_images(self, batch, N=8, *args, **kwargs):
+        log = super().log_images(batch=batch, N=N, *args, **kwargs)
+
+        if 'progressive' in log:
+            progressives = log['progressive']
+            prog_row = self._get_denoise_row_from_list(progressives, desc="Progressive Generation")
 
 
 class Layout2ImgDiffusion(LatentDiffusion):

@@ -65,6 +65,7 @@ data:
   params:
     batch_size: 16
     wrap: false
+    num_workers: 0
     train:
       target: ldm.data.iharmony4_dataset.Iharmony4Dataset
       params:
