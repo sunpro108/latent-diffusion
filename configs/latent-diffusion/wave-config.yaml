@@ -61,11 +61,11 @@ model:
 
 
 data:
-  target: main.DataModuleFromConfig
+  target: ldm.data.DataModuleFromConfig
   params:
     batch_size: 16
     wrap: false
-    num_workers: 0
+    num_workers: 80
     train:
       target: ldm.data.iharmony4_dataset.Iharmony4Dataset
       params:
@@ -83,12 +83,29 @@ data:
 lightning:
   callbacks:
     image_logger:
-      target: main.ImageLogger
+      target: ldm.callbacks.ImageLogger
       params:
-        batch_frequency: 1000
+        batch_frequency: 750
         max_images: 8
         increase_log_steps: True
+        clamp: true
+    setup_callback:
+      target: ldm.callbacks.SetupCallback
+      params:
+        resume: false
+    learning_rate_logger:
+      target: pytorch_lightning.callbacks.LearningRateMonitor
+      params:
+        logging_interval: step 
+    cuda_callback:
+      target: ldm.callbacks.CUDACallback
 
   trainer:
     benchmark: True
     accumulate_grad_batches: 2
+    log_every_n_steps: 10
+
+  plugins:
+    target: pytorch_lightning.plugins.DDPPlugin
+    params: 
+      find_unused_parameters: false
